@@ -10,6 +10,7 @@ import datetime
 from inngest.experimental import ai
 from data_loader import load_and_chunk_pdfs, get_embeddings
 from vector_db import QdrantStorage
+from custom_types import RAGChunkAndSRC, RAGUpsertResponse, RAGSearchResponse, RAGQueryRes
 
 load_dotenv()
 
