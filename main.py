@@ -5,6 +5,7 @@ import inngest
 import inngest.fast_api
 import uuid
 import os
+import google.genai as genai
 from dotenv import load_dotenv
 import datetime
 from inngest.experimental import ai
@@ -58,7 +59,7 @@ async def ingest_pdf(ctx:inngest.Context):
     inngested = await ctx.step.run("Embedding and upserting", lambda: _upsert(ChunkAndSrc=chunk_and_src), output_type=RAGUpsertResponse)
     return inngested.model_dump()
 
-@inngest_client.fast_api.create_function(
+@inngest_client.create_function(
     fn_id="RAG : Search PDF",
     trigger=inngest.TriggerEvent(event="rag/search-pdf")
 )
@@ -69,7 +70,29 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
         res = store.search(query_vector=query_vec, top_k=top_k)
         return RAGSearchResponse(context=res["context"], sources=res["sources"])
 
+    question = ctx.event.data["question"]
+    top_k = ctx.event.data.get("top_k",5)
+    search_res = await ctx.step.run("Searching Qdrant", lambda: _search(question=question, top_k=top_k), output_type=RAGSearchResponse)
+
+    context_block = "\n\n".join(f"- {c}" for c in search_res.context)
+    user_content = ("Use the following context to answer the question.\n\nContext:\n" + context_block + f"\n\nQuestion: {question}\nAnswer:" "\nAnswer consisely using the above context")
+
+    def _generate_answer():
+        from google import genai
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=user_content,
+            config={
+                "temperature": 0.2,
+                "max_output_tokens": 1024,
+            }
+        )
+        return response.text
+    
+    answer = await ctx.step.run("Generating answer with Gemini", lambda: _generate_answer())
+    return {"answer": answer, "sources": search_res.sources, "num_context": len(search_res.context)}
 
 app = FastAPI()
 
-inngest.fast_api.serve(app, inngest_client,[ingest_pdf])
+inngest.fast_api.serve(app, inngest_client,[ingest_pdf, rag_query_pdf_ai])
